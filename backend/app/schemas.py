@@ -1,10 +1,11 @@
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
-from app.db.models import ExperimentStatus, InfrastructureSeverity, MetricClassification
+from app.db.models import ExperimentStatus, InfrastructureSeverity, MetricClassification, SchedulerRunStatus
 
 
 class ORMModel(BaseModel):
@@ -145,6 +146,35 @@ class InfrastructureAlertRead(ORMModel):
     resolved_at: datetime | None
     created_at: datetime
     event: InfrastructureEventRead
+
+
+class InfrastructureCheckRunRead(ORMModel):
+    id: UUID
+    started_at: datetime
+    finished_at: datetime | None
+    duration_ms: int | None
+    status: SchedulerRunStatus
+    message: str
+
+
+class SchedulerState(StrEnum):
+    DISABLED = "disabled"
+    NOT_STARTED = "not_started"
+    RUNNING = "running"
+    INACTIVE = "inactive"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+class SchedulerStatusRead(BaseModel):
+    enabled: bool
+    status: SchedulerState
+    interval_seconds: int
+    last_check: InfrastructureCheckRunRead | None
+    next_execution_at: datetime | None
+    last_heartbeat_at: datetime | None
+    heartbeat_expires_at: datetime | None
+    recent_errors: list[InfrastructureCheckRunRead]
 
 
 class MetricDefinitionCreate(BaseModel):

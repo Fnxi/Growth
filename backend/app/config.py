@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     tracking_rate_limit: int = 30
     tracking_rate_window_seconds: int = 60
     system_check_token: str | None = None
+    monitoring_scheduler_enabled: bool = False
+    monitoring_check_interval_seconds: int = Field(default=60, ge=10, le=86400)
 
     @field_validator("database_url")
     @classmethod

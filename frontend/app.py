@@ -97,6 +97,25 @@ if page == "Resumen":
         if system["status"] != "healthy":
             st.warning("Algún componente crítico no está disponible. Revisa los mensajes de estado antes de operar.")
         st.caption(f"Última comprobación: {system['checked_at']}")
+        scheduler = get("/system/scheduler")
+        if scheduler:
+            st.subheader("Programador de infraestructura")
+            scheduler_columns = st.columns(4)
+            scheduler_columns[0].metric("Estado", scheduler["status"])
+            scheduler_columns[1].metric("Intervalo", f"{scheduler['interval_seconds']} s")
+            scheduler_columns[2].metric("Última ejecución", scheduler["last_check"]["started_at"] if scheduler["last_check"] else "Sin ejecuciones")
+            scheduler_columns[3].metric("Duración", f"{scheduler['last_check']['duration_ms']} ms" if scheduler["last_check"] and scheduler["last_check"]["duration_ms"] is not None else "No disponible")
+            if scheduler["status"] == "not_started":
+                st.info("El programador está habilitado, pero todavía no hay evidencia de que haya iniciado.")
+            if scheduler["last_heartbeat_at"]:
+                st.caption(f"Último heartbeat UTC: {scheduler['last_heartbeat_at']}")
+            if scheduler["last_check"]:
+                st.caption(f"Resultado: {scheduler['last_check']['status']} · {scheduler['last_check']['message']}")
+            if scheduler["next_execution_at"]:
+                st.caption(f"Próxima ejecución prevista: {scheduler['next_execution_at']}")
+            if scheduler["recent_errors"]:
+                st.warning("Hay errores recientes del programador.")
+                st.dataframe(scheduler["recent_errors"], use_container_width=True, hide_index=True)
         alerts = get("/system/alerts")
         events = get("/system/events?limit=8")
         if alerts:

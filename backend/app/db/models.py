@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Table,
@@ -44,6 +45,14 @@ class InfrastructureSeverity(StrEnum):
     INFO = "info"
     WARNING = "warning"
     CRITICAL = "critical"
+
+
+class SchedulerRunStatus(StrEnum):
+    RUNNING = "running"
+    SUCCESS = "success"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 campaign_posts = Table(
@@ -228,3 +237,25 @@ class InfrastructureAlert(UUIDModel, TimestampedModel, Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     event: Mapped[InfrastructureEvent] = relationship(back_populates="alert")
+
+
+class InfrastructureCheckRun(UUIDModel, Base):
+    __tablename__ = "infrastructure_check_runs"
+    __table_args__ = (Index("ix_infrastructure_check_runs_started_at", "started_at"),)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    status: Mapped[SchedulerRunStatus] = mapped_column(
+        Enum(SchedulerRunStatus, name="scheduler_run_status", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+    )
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class InfrastructureSchedulerHeartbeat(Base):
+    __tablename__ = "infrastructure_scheduler_heartbeat"
+
+    scheduler_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

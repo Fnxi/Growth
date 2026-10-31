@@ -4,12 +4,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import delete, text
 
 from app.db.session import get_session_factory
-from app.db.models import InfrastructureEvent
+from app.db.models import InfrastructureCheckRun, InfrastructureEvent, InfrastructureSchedulerHeartbeat
 from app.config import get_settings
 import app.infrastructure_events as infrastructure_events
+from app.api import system as system_api
 from app.main import app
 
 pytestmark = pytest.mark.skipif(
@@ -184,3 +185,19 @@ def test_system_status_is_read_only_and_internal_check_persists_transition(clien
     assert response.status_code == 200
     with get_session_factory()() as session:
         assert len(session.query(InfrastructureEvent).all()) > before
+
+
+def test_scheduler_status_reports_not_started_without_heartbeat(client: TestClient, monkeypatch) -> None:
+    with get_session_factory()() as session:
+        session.execute(delete(InfrastructureCheckRun))
+        session.execute(delete(InfrastructureSchedulerHeartbeat))
+        session.commit()
+    monkeypatch.setattr(
+        system_api,
+        "get_settings",
+        lambda: type("Settings", (), {"monitoring_scheduler_enabled": True, "monitoring_check_interval_seconds": 10})(),
+    )
+    response = client.get("/system/scheduler")
+    assert response.status_code == 200
+    assert response.json()["status"] == "not_started"
+    assert response.json()["last_heartbeat_at"] is None
