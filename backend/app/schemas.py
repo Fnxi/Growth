@@ -5,11 +5,41 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
-from app.db.models import ExperimentStatus, InfrastructureSeverity, MetricClassification, SchedulerRunStatus
+from app.db.models import ExperimentStatus, InfrastructureSeverity, MembershipStatus, MetricClassification, OrganizationRole, PlatformRole, SchedulerRunStatus, UserStatus
 
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=43, max_length=512)
+
+
+class AuthTokenRead(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class MembershipRead(ORMModel):
+    organization_id: UUID
+    role: OrganizationRole
+    status: MembershipStatus
+
+
+class AuthMeRead(BaseModel):
+    id: UUID
+    email: str
+    status: UserStatus
+    platform_role: PlatformRole
+    memberships: list[MembershipRead]
 
 
 class PeriodModel(BaseModel):

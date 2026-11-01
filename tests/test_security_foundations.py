@@ -48,7 +48,7 @@ def test_jwt_validates_access_claims_and_key_rotation() -> None:
     token = sign_access_token("user-id", configured)
     assert jwt.get_unverified_header(token)["kid"] == "new"
     assert validate_access_token(token, configured)["sub"] == "user-id"
-    old_payload = {"sub": "user-id", "iss": configured.security_jwt_issuer, "aud": configured.security_jwt_audience, "token_use": "access", "iat": datetime.now(timezone.utc), "exp": datetime(2100, 1, 1, tzinfo=timezone.utc)}
+    old_payload = {"sub": "user-id", "sid": "session-id", "jti": "token-id", "iss": configured.security_jwt_issuer, "aud": configured.security_jwt_audience, "token_use": "access", "iat": datetime.now(timezone.utc), "nbf": datetime.now(timezone.utc), "exp": datetime(2100, 1, 1, tzinfo=timezone.utc)}
     old_token = jwt.encode(old_payload, configured.jwt_keyring["old"], algorithm="HS256", headers={"kid": "old"})
     assert validate_access_token(old_token, configured)["sub"] == "user-id"
     retired = settings(security_jwt_active_kid="new", security_jwt_keyring=keyring(new=encoded_key(b"n" * 64)))

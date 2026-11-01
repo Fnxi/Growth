@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     security_jwt_keyring: str | None = None
     security_jwt_issuer: str = "growth-hacking-lab"
     security_jwt_audience: str = "growth-hacking-lab-api"
-    security_access_token_minutes: int = Field(default=15, ge=1, le=60)
+    security_access_token_minutes: int = Field(default=10, ge=1, le=60)
+    security_refresh_token_days: int = Field(default=14, ge=1, le=31)
+    security_session_max_days: int = Field(default=30, ge=1, le=90)
     security_cors_allowed_origins: str = "http://localhost:8501,http://127.0.0.1:8501"
     security_docs_enabled: bool | None = None
     security_cookie_secure: bool | None = None
@@ -47,6 +49,8 @@ class Settings(BaseSettings):
     security_hsts_enabled: bool = False
     security_auth_rate_limit: int = Field(default=5, ge=1, le=100)
     security_auth_rate_window_seconds: int = Field(default=60, ge=1, le=3600)
+    security_refresh_rate_limit: int = Field(default=10, ge=1, le=100)
+    security_refresh_rate_window_seconds: int = Field(default=60, ge=1, le=3600)
 
     @field_validator("database_url")
     @classmethod

@@ -71,10 +71,29 @@ material criptográfico. Los access tokens llevan `token_use=access`; los futuro
 refresh tokens tendrán claves, validación y ciclo de vida separados.
 
 Argon2id usa 64 MiB de memoria, tres iteraciones y paralelismo cuatro. Las
-contraseñas se limitan a 1024 bytes y nunca se registran. Los futuros endpoints
-de identidad usarán `SECURITY_AUTH_RATE_LIMIT` y
-`SECURITY_AUTH_RATE_WINDOW_SECONDS`; un límite en memoria no será suficiente con
-múltiples workers o réplicas SaaS y deberá sustituirse por un almacén compartido.
+contraseñas se limitan a 1024 bytes y nunca se registran.
+
+## Autenticación local
+
+No hay registro público ni creación pública de organizaciones. Un administrador
+provisionado mediante un flujo controlado futuro podrá crear usuarios. `POST
+/auth/login` recibe correo y contraseña y devuelve un access token Bearer de 10
+minutos junto con un refresh token opaco. El access token se envía como
+`Authorization: Bearer <token>` a `GET /auth/me`, `POST /auth/logout` y
+`POST /auth/logout-all`.
+
+`POST /auth/refresh` rota el refresh token cada vez que se usa. La reutilización
+de un token ya consumido revoca su familia y la sesión. Los refresh tokens duran
+14 días como máximo y nunca exceden la vida máxima de sesión de 30 días; solo se
+persiste su hash SHA-256. Los límites locales usan
+`SECURITY_AUTH_RATE_LIMIT`/`SECURITY_AUTH_RATE_WINDOW_SECONDS` para login y
+`SECURITY_REFRESH_RATE_LIMIT`/`SECURITY_REFRESH_RATE_WINDOW_SECONDS` para
+refresh. Son límites por proceso, no distribuidos, y deben migrar a un almacén
+compartido antes de ejecutar varios workers o réplicas.
+
+En esta fase las rutas de campañas, publicaciones, experimentos, tracking,
+asistente e inteligencia operativa siguen sin protección. No expongas el servicio
+públicamente hasta completar aislamiento tenant y RBAC.
 
 ## Supervisión programada
 

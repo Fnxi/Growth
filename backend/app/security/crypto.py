@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
 
 import jwt
 from argon2 import PasswordHasher
@@ -38,13 +39,13 @@ def password_needs_rehash(password_hash: str) -> bool:
         return False
 
 
-def sign_access_token(subject: str, settings: Settings, now: datetime | None = None) -> str:
+def sign_access_token(subject: str, settings: Settings, session_id: UUID | str | None = None, token_id: UUID | str | None = None, now: datetime | None = None) -> str:
     if not isinstance(subject, str) or not subject:
         raise TokenValidationError("Token subject is invalid.")
     if not settings.security_jwt_active_kid:
         raise TokenValidationError("Token signing is not configured.")
     issued_at = now or datetime.now(timezone.utc)
-    payload = {"sub": subject, "iss": settings.security_jwt_issuer, "aud": settings.security_jwt_audience, "token_use": "access", "iat": issued_at, "exp": issued_at + timedelta(minutes=settings.security_access_token_minutes)}
+    payload = {"sub": subject, "sid": str(session_id or uuid4()), "jti": str(token_id or uuid4()), "iss": settings.security_jwt_issuer, "aud": settings.security_jwt_audience, "token_use": "access", "iat": issued_at, "nbf": issued_at, "exp": issued_at + timedelta(minutes=settings.security_access_token_minutes)}
     return jwt.encode(payload, settings.jwt_keyring[settings.security_jwt_active_kid], algorithm=_algorithm, headers={"kid": settings.security_jwt_active_kid})
 
 
@@ -56,7 +57,7 @@ def validate_access_token(token: str, settings: Settings) -> dict[str, object]:
         kid = header.get("kid")
         if header.get("alg") != _algorithm or not isinstance(kid, str) or kid not in settings.jwt_keyring:
             raise TokenValidationError("Token header is not accepted.")
-        payload = jwt.decode(token, settings.jwt_keyring[kid], algorithms=[_algorithm], issuer=settings.security_jwt_issuer, audience=settings.security_jwt_audience, options={"require": ["sub", "iss", "aud", "token_use", "iat", "exp"]})
+        payload = jwt.decode(token, settings.jwt_keyring[kid], algorithms=[_algorithm], issuer=settings.security_jwt_issuer, audience=settings.security_jwt_audience, options={"require": ["sub", "sid", "jti", "iss", "aud", "token_use", "iat", "nbf", "exp"]})
         if payload["token_use"] != "access":
             raise TokenValidationError("Token use is not accepted.")
         return payload
