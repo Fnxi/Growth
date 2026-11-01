@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from app.api import assistant, campaigns, dashboard, distribution_events, experiment_results, experiments, metric_definitions, posts, snapshots, system, tracking
+from app.api import assistant, campaigns, dashboard, distribution_events, experiment_results, experiments, metric_definitions, operational_intelligence, posts, snapshots, system, tracking
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
@@ -29,6 +29,7 @@ app.include_router(dashboard.router)
 app.include_router(experiment_results.router)
 app.include_router(system.router)
 app.include_router(assistant.router)
+app.include_router(operational_intelligence.router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 import httpx
@@ -12,6 +13,7 @@ from app.assistant.service import AssistantService
 from app.db.session import get_session_factory
 from app.main import app
 from app.schemas import AssistantChatRequest
+from app.operational_intelligence.engine import AnalysisItem
 
 
 class FakeProvider:
@@ -174,3 +176,39 @@ def test_assistant_endpoint_returns_429_when_local_limit_is_reached(monkeypatch)
             assert response.headers["Retry-After"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_operational_questions_load_only_calculated_intelligence_context(monkeypatch) -> None:
+    item = AnalysisItem("recurrent-events:postgresql", "recurrent_infrastructure_event", "warning", "Historical recurrence.", "3", "3", datetime.now(timezone.utc), ("event:valid",), ("Historical only.",))
+    calls = []
+
+    class AnalysisService:
+        def __init__(self, _settings):
+            pass
+
+        def analyze(self, _session):
+            calls.append(True)
+            return [item]
+
+    monkeypatch.setattr("app.assistant.context.OperationalIntelligenceService", AnalysisService)
+    with get_session_factory()() as session:
+        context, references = ContextBuilder(5000).build(session, "Explain the anomaly priority")
+        ordinary_context, _ = ContextBuilder(5000).build(session, "List campaigns")
+    assert "operational_intelligence" in context
+    assert "recurrent-events:postgresql" in references
+    assert "operational_intelligence" not in ordinary_context
+    assert len(calls) == 1
+
+
+def test_assistant_keeps_only_valid_anomaly_references(monkeypatch) -> None:
+    class FixedContextBuilder:
+        def __init__(self, _max_characters):
+            pass
+
+        def build(self, _session, _question):
+            return "{}", ["recurrent-events:postgresql"]
+
+    provider = FakeProvider(content='{"answer":"Observed.","observed_facts":[],"interpretations":[],"recommendations":[],"insufficient_information":[],"references":["recurrent-events:postgresql","recurrent-events:invented","event:arbitrary"]}')
+    monkeypatch.setattr("app.assistant.service.ContextBuilder", FixedContextBuilder)
+    response = AssistantService(settings(), provider).chat(None, AssistantChatRequest(question="Explain anomalies"))
+    assert response.references == ["recurrent-events:postgresql"]

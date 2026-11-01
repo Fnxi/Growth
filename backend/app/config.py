@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     ai_rate_limit: int = Field(default=10, ge=1, le=1000)
     ai_rate_window_seconds: int = Field(default=60, ge=1, le=3600)
     ai_max_concurrent_requests: int = Field(default=2, ge=1, le=20)
+    intelligence_metric_change_threshold_percent: int = Field(default=30, ge=1, le=1000)
+    intelligence_check_duration_threshold_percent: int = Field(default=50, ge=1, le=1000)
+    intelligence_recurrent_event_threshold: int = Field(default=3, ge=2, le=100)
 
     @field_validator("database_url")
     @classmethod

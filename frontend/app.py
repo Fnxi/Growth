@@ -75,6 +75,7 @@ navigation = [
     ("Experimentos", ":material/science:"),
     ("Métricas", ":material/monitoring:"),
     ("Tracking", ":material/link:"),
+    ("Inteligencia Operativa", ":material/insights:"),
     ("Asistente IA", ":material/psychology:"),
 ]
 if "active_page" not in st.session_state:
@@ -256,7 +257,7 @@ elif page == "Tracking":
             st.bar_chart(data["results"], x="dimension", y="clicks_registered")
     st.caption("Los clics son eventos propios registrados. No son usuarios únicos, alcance ni evidencia causal.")
 
-else:
+elif page == "Asistente IA":
     heading("Asistente IA", "Inteligencia operativa basada exclusivamente en datos de la plataforma.")
     assistant_status = get("/assistant/status")
     if not assistant_status or assistant_status["status"] != "available":
@@ -288,3 +289,19 @@ else:
                         st.markdown(f"**{title}:** " + " · ".join(response[key]))
             except ApiError as error:
                 st.error(f"El asistente no pudo responder: {error}")
+
+else:
+    heading("Inteligencia operativa", "Señales deterministas basadas en datos observados y ejecución de infraestructura.")
+    intelligence = get("/operational-intelligence/summary")
+    if intelligence is None:
+        empty("No fue posible consultar la inteligencia operativa.")
+    elif not intelligence["anomalies"]:
+        empty("No hay anomalías detectables: pueden faltar observaciones suficientes.")
+        st.caption("Las reglas requieren al menos tres observaciones comparables; no infieren causalidad.")
+    else:
+        st.subheader("Anomalías y hallazgos")
+        st.dataframe(intelligence["anomalies"], use_container_width=True, hide_index=True)
+        if intelligence["recommendations"]:
+            st.subheader("Recomendaciones priorizadas")
+            st.dataframe(intelligence["recommendations"], use_container_width=True, hide_index=True)
+        st.caption("La evidencia muestra asociaciones y umbrales deterministas; no demuestra causas.")

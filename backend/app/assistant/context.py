@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Campaign, Experiment, InfrastructureAlert, InfrastructureCheckRun, InfrastructureEvent, MetricDefinition, PublicMetricSnapshot, TrackingEvent, TrackingLink
 from app.monitoring import inspect_system
+from app.operational_intelligence.service import OperationalIntelligenceService
+from app.config import get_settings
 
 
 class ContextBuilder:
@@ -25,6 +27,10 @@ class ContextBuilder:
             "checks": [{"id": str(item.id), "status": item.status.value, "started_at": item.started_at.isoformat(), "duration_ms": item.duration_ms} for item in runs],
         }
         references = [f"event:{item.id}" for item in events] + [f"alert:{item.id}" for item in alerts] + [f"check:{item.id}" for item in runs]
+        if any(term in question.lower() for term in ("anomal", "tendencia", "patrón", "patron", "inteligencia", "prioridad")):
+            analysis = OperationalIntelligenceService(get_settings()).analyze(session)
+            facts["operational_intelligence"] = [{"id": item.id, "category": item.category, "severity": item.severity, "observed_value": item.observed_value, "baseline": item.baseline, "evidence": list(item.evidence), "limitations": list(item.limitations)} for item in analysis]
+            references.extend(item.id for item in analysis)
         terms = question.lower()
         if any(term in terms for term in ("campaña", "experimento", "métrica", "metrica", "tracking", "clic")):
             experiments = list(session.scalars(select(Experiment).order_by(Experiment.updated_at.desc()).limit(10)))

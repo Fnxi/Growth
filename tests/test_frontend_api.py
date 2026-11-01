@@ -23,3 +23,5 @@ def test_dashboard_includes_the_ai_assistant_section() -> None:
     assert "Asistente IA" in source
     assert '"/assistant/status"' in source
     assert '"/assistant/chat"' in source
+    assert "Inteligencia Operativa" in source
+    assert '"/operational-intelligence/summary"' in source

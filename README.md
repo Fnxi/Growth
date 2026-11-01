@@ -110,6 +110,20 @@ solo proveedor, modelo, duración, estado y tokens devueltos, no conversaciones
 ni contexto. Los endpoints son `GET /assistant/status`, `POST /assistant/chat`
 y `POST /assistant/diagnosis`.
 
+## Inteligencia operativa
+
+Los endpoints `GET /operational-intelligence/*` ejecutan reglas deterministas de
+solo lectura. `/trends` significa cambios relevantes detectados por umbral; no
+es regresión, estacionalidad ni predicción. Las métricas se comparan solo dentro
+de la misma publicación y definición, requieren tres observaciones y no calculan
+porcentajes con una referencia no positiva. Los checks usan únicamente estados
+`success` o `degraded` terminados y una línea base de checks anteriores.
+
+La recurrencia histórica de eventos se presenta como advertencia. Solo una alerta
+no resuelta del mismo servicio permite indicar una condición crítica vigente.
+Los resultados en vivo pueden variar entre solicitudes concurrentes y no
+demuestran causalidad, causas raíz ni atribución exclusiva a experimentos.
+
 En el entorno local no hay autenticación de API: el comando documentado de
 Uvicorn se enlaza a loopback por defecto y Docker Compose no publica FastAPI.
 No expongas la aplicación con `--host 0.0.0.0` ni mediante un proxy público sin

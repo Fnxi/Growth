@@ -208,6 +208,25 @@ class AssistantResponse(BaseModel):
     references: list[str] = Field(default_factory=list, max_length=20)
 
 
+class OperationalAnalysisRead(BaseModel):
+    id: str
+    category: str
+    severity: str
+    description: str
+    observed_value: str | None
+    baseline: str | None
+    detected_at: datetime
+    evidence: list[str]
+    limitations: list[str]
+
+
+class OperationalRecommendationRead(BaseModel):
+    priority: str
+    recommendation: str
+    evidence: list[str]
+    limitations: list[str]
+
+
 class MetricDefinitionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_]*$")
     category: str = Field(min_length=1, max_length=100)
