@@ -20,6 +20,7 @@ services:
     profiles: ["monitoring"]
     restart: on-failure
     environment:
+      APP_ENV: ${APP_ENV:?Set APP_ENV in .env}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-growth_lab}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-growth_lab}
       MONITORING_SCHEDULER_ENABLED: ${MONITORING_SCHEDULER_ENABLED:-false}
       MONITORING_CHECK_INTERVAL_SECONDS: ${MONITORING_CHECK_INTERVAL_SECONDS:-60}

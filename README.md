@@ -42,6 +42,40 @@ puerto `5432` esta ocupado en el equipo, actualiza en `.env` tanto
 El valor de `POSTGRES_PASSWORD` en `.env.example` es exclusivamente local y se
 debe sustituir antes de cualquier uso fuera del equipo.
 
+## Fundamentos de seguridad
+
+`APP_ENV` es obligatorio y debe ser `development` o `production`. El archivo de
+ejemplo declara explícitamente el modo local. Producción requiere una allowlist
+de CORS sin comodines, cookies seguras, HSTS activado y documentación desactivada.
+Activa `SECURITY_HSTS_ENABLED=true` únicamente cuando TLS está garantizado por el
+proxy o balanceador de confianza; la aplicación no confía en
+`X-Forwarded-Proto` para decidirlo. El proxy debe terminar TLS, limitar quién puede
+enviar headers reenviados y añadir HSTS por sí mismo si es el borde público.
+
+Las claves JWT se configuran como un keyring JSON con valores Base64URL canónicos
+sin padding. Cada valor debe decodificar a al menos 32 bytes. Genera una clave con
+un CSPRNG, por ejemplo:
+
+```powershell
+python -c "import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('='))"
+```
+
+El validador comprueba formato canónico y cantidad de bytes, pero no puede probar
+la entropía de un valor arbitrario: la generación aleatoria es responsabilidad del
+operador. Para rotar una clave, agrega una nueva entrada a
+`SECURITY_JWT_KEYRING`, cambia `SECURITY_JWT_ACTIVE_KID` al nuevo `kid` y conserva
+la anterior hasta que expire el máximo de access tokens emitidos con ella. Retira
+después la entrada anterior: sus tokens dejarán de ser válidos. Los `kid` del
+token solo seleccionan claves ya presentes en este keyring; nunca proporcionan
+material criptográfico. Los access tokens llevan `token_use=access`; los futuros
+refresh tokens tendrán claves, validación y ciclo de vida separados.
+
+Argon2id usa 64 MiB de memoria, tres iteraciones y paralelismo cuatro. Las
+contraseñas se limitan a 1024 bytes y nunca se registran. Los futuros endpoints
+de identidad usarán `SECURITY_AUTH_RATE_LIMIT` y
+`SECURITY_AUTH_RATE_WINDOW_SECONDS`; un límite en memoria no será suficiente con
+múltiples workers o réplicas SaaS y deberá sustituirse por un almacén compartido.
+
 ## Supervisión programada
 
 El planificador es un proceso independiente de FastAPI. Reutiliza la misma
