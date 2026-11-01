@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+import re
 from uuid import UUID
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    LargeBinary,
     ForeignKey,
     Index,
     Numeric,
@@ -21,6 +23,8 @@ from sqlalchemy import (
     func,
     JSON,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampedModel, UUIDModel
@@ -53,6 +57,199 @@ class SchedulerRunStatus(StrEnum):
     DEGRADED = "degraded"
     FAILED = "failed"
     SKIPPED = "skipped"
+
+
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class PlatformRole(StrEnum):
+    STANDARD = "standard"
+    PLATFORM_ADMIN = "platform_admin"
+
+
+class OrganizationStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    ARCHIVED = "archived"
+
+
+class OrganizationRole(StrEnum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    ANALYST = "analyst"
+    VIEWER = "viewer"
+
+
+class MembershipStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REMOVED = "removed"
+
+
+def normalize_email(value: str) -> str:
+    normalized = value.strip().casefold()
+    if not normalized or "@" not in normalized:
+        raise ValueError("email_display must contain an email address.")
+    return normalized
+
+
+def normalize_slug(value: str) -> str:
+    normalized = value.strip().casefold()
+    if not normalized or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", normalized):
+        raise ValueError("slug_normalized must contain lowercase letters, numbers, and hyphens only.")
+    return normalized
+
+
+class User(UUIDModel, TimestampedModel, Base):
+    __tablename__ = "users"
+
+    email_normalized: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    email_display: Mapped[str] = mapped_column(String(320), nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus, name="user_status", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+        default=UserStatus.ACTIVE,
+        server_default="active",
+    )
+    platform_role: Mapped[PlatformRole] = mapped_column(
+        Enum(PlatformRole, name="platform_role", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+        default=PlatformRole.STANDARD,
+        server_default="standard",
+    )
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    memberships: Mapped[list[OrganizationMembership]] = relationship(back_populates="user")
+    sessions: Mapped[list[AuthSession]] = relationship(back_populates="user")
+    audit_events: Mapped[list[AuthAuditEvent]] = relationship(back_populates="user")
+
+
+class Organization(UUIDModel, TimestampedModel, Base):
+    __tablename__ = "organizations"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug_normalized: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    status: Mapped[OrganizationStatus] = mapped_column(
+        Enum(OrganizationStatus, name="organization_status", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+        default=OrganizationStatus.ACTIVE,
+        server_default="active",
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    memberships: Mapped[list[OrganizationMembership]] = relationship(back_populates="organization")
+    audit_events: Mapped[list[AuthAuditEvent]] = relationship(back_populates="organization")
+
+
+class OrganizationMembership(UUIDModel, TimestampedModel, Base):
+    __tablename__ = "organization_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "organization_id", name="uq_membership_user_organization"),
+        Index("ix_membership_user_status", "user_id", "status"),
+        Index("ix_membership_organization_status", "organization_id", "status"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False)
+    role: Mapped[OrganizationRole] = mapped_column(
+        Enum(OrganizationRole, name="organization_role", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+    )
+    status: Mapped[MembershipStatus] = mapped_column(
+        Enum(MembershipStatus, name="membership_status", values_callable=lambda values: [item.value for item in values]),
+        nullable=False,
+        default=MembershipStatus.ACTIVE,
+        server_default="active",
+    )
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="memberships")
+    organization: Mapped[Organization] = relationship(back_populates="memberships")
+
+
+class AuthSession(UUIDModel, Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (Index("ix_auth_session_user_active", "user_id", "revoked_at", "expires_at"),)
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_reason: Mapped[str | None] = mapped_column(String(100))
+    ip_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    auth_method: Mapped[str] = mapped_column(String(50), nullable=False, default="password", server_default="password")
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+    refresh_tokens: Mapped[list[RefreshToken]] = relationship(back_populates="session", cascade="all, delete-orphan")
+    audit_events: Mapped[list[AuthAuditEvent]] = relationship(back_populates="session")
+
+
+class RefreshToken(UUIDModel, Base):
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_refresh_token_hash"),
+        Index("ix_refresh_token_session", "session_id"),
+        Index("ix_refresh_token_family", "family_id"),
+    )
+
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False)
+    family_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    parent_token_id: Mapped[UUID | None] = mapped_column(ForeignKey("refresh_tokens.id", ondelete="SET NULL"))
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replaced_by_token_id: Mapped[UUID | None] = mapped_column(ForeignKey("refresh_tokens.id", ondelete="SET NULL"))
+
+    session: Mapped[AuthSession] = relationship(back_populates="refresh_tokens")
+    parent_token: Mapped[RefreshToken | None] = relationship(foreign_keys=[parent_token_id], remote_side="RefreshToken.id")
+    replacement_token: Mapped[RefreshToken | None] = relationship(foreign_keys=[replaced_by_token_id], remote_side="RefreshToken.id")
+
+
+class AuthAuditEvent(UUIDModel, Base):
+    __tablename__ = "auth_audit_events"
+    __table_args__ = (
+        Index("ix_auth_audit_event_user_occurred", "user_id", "occurred_at"),
+        Index("ix_auth_audit_event_organization_occurred", "organization_id", "occurred_at"),
+    )
+
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    session_id: Mapped[UUID | None] = mapped_column(ForeignKey("auth_sessions.id", ondelete="SET NULL"))
+    organization_id: Mapped[UUID | None] = mapped_column(ForeignKey("organizations.id", ondelete="RESTRICT"))
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ip_hash: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    reason_code: Mapped[str | None] = mapped_column(String(100))
+    metadata_json: Mapped[dict[str, object]] = mapped_column("metadata", JSONB, nullable=False, default=dict, server_default="{}")
+
+    user: Mapped[User | None] = relationship(back_populates="audit_events")
+    session: Mapped[AuthSession | None] = relationship(back_populates="audit_events")
+    organization: Mapped[Organization | None] = relationship(back_populates="audit_events")
+
+
+@event.listens_for(User, "before_insert")
+@event.listens_for(User, "before_update")
+def synchronize_user_email(_mapper, _connection, target: User) -> None:
+    target.email_display = target.email_display.strip()
+    target.email_normalized = normalize_email(target.email_display)
+
+
+@event.listens_for(Organization, "before_insert")
+@event.listens_for(Organization, "before_update")
+def synchronize_organization_slug(_mapper, _connection, target: Organization) -> None:
+    target.slug_normalized = normalize_slug(target.slug_normalized)
 
 
 campaign_posts = Table(
