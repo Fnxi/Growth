@@ -15,6 +15,16 @@ class Settings(BaseSettings):
     system_check_token: str | None = None
     monitoring_scheduler_enabled: bool = False
     monitoring_check_interval_seconds: int = Field(default=60, ge=10, le=86400)
+    ai_enabled: bool = False
+    ai_provider: str = "openai"
+    ai_openai_api_key: str | None = None
+    ai_model: str = "gpt-4.1-mini"
+    ai_timeout_seconds: int = Field(default=20, ge=1, le=120)
+    ai_max_output_tokens: int = Field(default=700, ge=100, le=4000)
+    ai_max_context_characters: int = Field(default=12000, ge=1000, le=50000)
+    ai_rate_limit: int = Field(default=10, ge=1, le=1000)
+    ai_rate_window_seconds: int = Field(default=60, ge=1, le=3600)
+    ai_max_concurrent_requests: int = Field(default=2, ge=1, le=20)
 
     @field_validator("database_url")
     @classmethod

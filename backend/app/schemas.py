@@ -177,6 +177,37 @@ class SchedulerStatusRead(BaseModel):
     recent_errors: list[InfrastructureCheckRunRead]
 
 
+class AssistantAvailability(StrEnum):
+    DISABLED = "disabled"
+    NOT_CONFIGURED = "not_configured"
+    AVAILABLE = "available"
+
+
+class AssistantStatusRead(BaseModel):
+    status: AssistantAvailability
+    provider: str | None = None
+    model: str | None = None
+
+
+class AssistantMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class AssistantChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    history: list[AssistantMessage] = Field(default_factory=list, max_length=6)
+
+
+class AssistantResponse(BaseModel):
+    answer: str = Field(min_length=1, max_length=4000)
+    observed_facts: list[str] = Field(default_factory=list, max_length=12)
+    interpretations: list[str] = Field(default_factory=list, max_length=8)
+    recommendations: list[str] = Field(default_factory=list, max_length=8)
+    insufficient_information: list[str] = Field(default_factory=list, max_length=8)
+    references: list[str] = Field(default_factory=list, max_length=20)
+
+
 class MetricDefinitionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"^[a-z][a-z0-9_]*$")
     category: str = Field(min_length=1, max_length=100)

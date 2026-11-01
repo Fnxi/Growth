@@ -75,6 +75,7 @@ navigation = [
     ("Experimentos", ":material/science:"),
     ("Métricas", ":material/monitoring:"),
     ("Tracking", ":material/link:"),
+    ("Asistente IA", ":material/psychology:"),
 ]
 if "active_page" not in st.session_state:
     st.session_state.active_page = "Resumen"
@@ -230,7 +231,7 @@ elif page == "Métricas":
             else: empty("No hay observaciones disponibles para esta publicación.")
     else: empty("Registra una publicación y snapshots para ver evolución.")
 
-else:
+elif page == "Tracking":
     heading("Tracking propio", "Gestiona enlaces UTM y atribución de eventos propios con límites explícitos.")
     experiments = get("/experiments") or []
     with st.expander("Crear enlace UTM", expanded=False):
@@ -254,3 +255,36 @@ else:
             st.subheader(f"Clics por {group}")
             st.bar_chart(data["results"], x="dimension", y="clicks_registered")
     st.caption("Los clics son eventos propios registrados. No son usuarios únicos, alcance ni evidencia causal.")
+
+else:
+    heading("Asistente IA", "Inteligencia operativa basada exclusivamente en datos de la plataforma.")
+    assistant_status = get("/assistant/status")
+    if not assistant_status or assistant_status["status"] != "available":
+        state = assistant_status["status"] if assistant_status else "no disponible"
+        st.info(f"El asistente IA está {state}. Configura AI_ENABLED=true y una clave del proveedor solo en el backend.")
+    else:
+        st.caption(f"Proveedor: {assistant_status['provider']} · Modelo: {assistant_status['model']}")
+        if "assistant_history" not in st.session_state:
+            st.session_state.assistant_history = []
+        for item in st.session_state.assistant_history:
+            with st.chat_message(item["role"]):
+                st.write(item["content"])
+        suggestions = ["Resume el estado de infraestructura.", "¿Hay eventos recurrentes?", "¿Qué mantenimiento recomiendas?"]
+        selected = st.selectbox("Preguntas sugeridas", [""] + suggestions)
+        with st.form("assistant_chat", clear_on_submit=True):
+            question = st.text_area("Pregunta", value=selected, max_chars=1000)
+            submitted = st.form_submit_button("Consultar asistente")
+        if submitted and question.strip():
+            try:
+                response = api.post("/assistant/chat", {"question": question.strip(), "history": st.session_state.assistant_history[-6:]})
+                st.session_state.assistant_history.extend([
+                    {"role": "user", "content": question.strip()},
+                    {"role": "assistant", "content": response["answer"]},
+                ])
+                st.subheader("Respuesta")
+                st.write(response["answer"])
+                for title, key in [("Hechos observados", "observed_facts"), ("Interpretaciones", "interpretations"), ("Recomendaciones", "recommendations"), ("Información insuficiente", "insufficient_information"), ("Referencias", "references")]:
+                    if response[key]:
+                        st.markdown(f"**{title}:** " + " · ".join(response[key]))
+            except ApiError as error:
+                st.error(f"El asistente no pudo responder: {error}")
