@@ -23,6 +23,8 @@ from app.db.models import (
     Organization,
     OrganizationMembership,
     OrganizationRole,
+    MetricClassification,
+    MetricDefinition,
     User,
     campaign_posts,
 )
@@ -287,7 +289,7 @@ def test_campaign_and_post_routes_enforce_tenant_scope_roles_and_explicit_associ
     campaign_b = client.post(
         campaigns_b,
         headers=headers["owner"],
-        json={"name": f"Tenant B Campaign {uuid4().hex}", "description": "Tenant B data"},
+        json={"name": f"Tenant B Campaign {uuid4().hex}", "description": "Tenant B data", "post_ids": [post_b_id]},
     )
     assert campaign_b.status_code == 201
     campaign_b_id = campaign_b.json()["id"]
@@ -319,6 +321,103 @@ def test_campaign_and_post_routes_enforce_tenant_scope_roles_and_explicit_associ
         headers=headers["owner"],
         json={"post_ids": [post_a_id]},
     ).status_code == 200
+    experiment_a = client.post(
+        organization_url(data, "organization_a", "experiments"),
+        headers=headers["owner"],
+        json={"campaign_id": campaign_id, "name": f"Experiment A {uuid4().hex}", "hypothesis": "h", "variable": "v", "method": "m", "starts_at": "2026-01-01T00:00:00Z"},
+    )
+    assert experiment_a.status_code == 201
+    experiment_a_id = experiment_a.json()["id"]
+    assert client.post(
+        organization_url(data, "organization_a", "experiments"),
+        headers=headers["owner"],
+        json={"campaign_id": campaign_b_id, "name": f"Cross experiment {uuid4().hex}", "hypothesis": "h", "variable": "v", "method": "m", "starts_at": "2026-01-01T00:00:00Z"},
+    ).status_code == 404
+    experiment_b = client.post(
+        organization_url(data, "organization_b", "experiments"),
+        headers=headers["owner"],
+        json={"campaign_id": campaign_b_id, "name": f"Experiment B {uuid4().hex}", "hypothesis": "h", "variable": "v", "method": "m", "starts_at": "2026-01-01T00:00:00Z"},
+    )
+    assert experiment_b.status_code == 201
+    experiment_b_id = experiment_b.json()["id"]
+    experiments_a = organization_url(data, "organization_a", "experiments")
+    assert client.get(f"{experiments_a}/{experiment_b_id}", headers=headers["owner"]).status_code == 404
+    assert client.patch(f"{experiments_a}/{experiment_b_id}", headers=headers["owner"], json={"result": "x"}).status_code == 404
+    assert client.delete(f"{experiments_a}/{experiment_b_id}", headers=headers["owner"]).status_code == 404
+    assert client.get(f"{organization_url(data, 'organization_b', 'experiments')}/{experiment_b_id}", headers=headers["owner"]).status_code == 200
+    assert client.post(
+        organization_url(data, "organization_a", "distribution-events"),
+        headers=headers["editor"],
+        json={"experiment_id": experiment_a_id, "channel": "newsletter", "distributed_at": "2026-01-01T01:00:00Z"},
+    ).status_code == 201
+    assert client.get(f"{experiments_a}/{experiment_a_id}/distribution-events", headers=headers["reader"]).status_code == 200
+    distribution_b = client.post(
+        organization_url(data, "organization_b", "distribution-events"),
+        headers=headers["owner"],
+        json={"experiment_id": experiment_b_id, "channel": "tenant-b", "distributed_at": "2026-01-01T01:00:00Z"},
+    )
+    assert distribution_b.status_code == 201
+    assert client.get(f"{experiments_a}/{experiment_b_id}/distribution-events", headers=headers["owner"]).status_code == 404
+    assert client.get(
+        f"{organization_url(data, 'organization_b', 'experiments')}/{experiment_b_id}/distribution-events",
+        headers=headers["owner"],
+    ).json()[0]["id"] == distribution_b.json()["id"]
+    link = client.post(
+        organization_url(data, "organization_a", "tracking-links"),
+        headers=headers["owner"],
+        json={"experiment_id": experiment_a_id, "destination_url": "https://www.instagram.com/p/example/", "utm_source": "newsletter", "utm_medium": "email", "utm_campaign": "tenant-a"},
+    )
+    assert link.status_code == 201
+    public_redirect = client.get(f"/r/{link.json()['code']}", follow_redirects=False)
+    assert public_redirect.status_code == 307
+    assert public_redirect.content == b""
+    public_text = " ".join(public_redirect.headers.values())
+    for identifier in (str(data["organization_a"]), campaign_id, experiment_a_id, link.json()["id"]):
+        assert identifier not in public_text
+    assert client.get(f"{organization_url(data, 'organization_a', 'tracking-links')}/{link.json()['id']}/clicks", headers=headers["reader"]).json()["clicks_registered"] == 1
+    link_b = client.post(
+        organization_url(data, "organization_b", "tracking-links"),
+        headers=headers["owner"],
+        json={"experiment_id": experiment_b_id, "destination_url": "https://www.instagram.com/p/example-b/", "utm_source": "tenant-b", "utm_medium": "email", "utm_campaign": "tenant-b"},
+    )
+    assert link_b.status_code == 201
+    assert client.get(f"/r/{link_b.json()['code']}", follow_redirects=False).status_code == 307
+    tracking_links_a = organization_url(data, "organization_a", "tracking-links")
+    assert client.get(f"{tracking_links_a}?experiment_id={experiment_b_id}", headers=headers["owner"]).status_code == 404
+    assert client.patch(f"{tracking_links_a}/{link_b.json()['id']}", headers=headers["owner"], json={"is_active": False}).status_code == 404
+    assert client.get(
+        f"{organization_url(data, 'organization_b', 'tracking-links')}?experiment_id={experiment_b_id}",
+        headers=headers["owner"],
+    ).json()[0]["is_active"] is True
+    attribution_a = client.get(
+        f"{organization_url(data, 'organization_a', 'tracking/attribution')}?group_by=utm_source",
+        headers=headers["reader"],
+    )
+    assert attribution_a.status_code == 200
+    assert attribution_a.json()["results"] == [{"dimension": "newsletter", "clicks_registered": 1}]
+    metric = MetricDefinition(name=f"tenant_metric_{uuid4().hex}", category="engagement", source="manual", limitations="test", classification=MetricClassification.OBSERVED)
+    session.add(metric)
+    session.commit()
+    assert client.post(
+        organization_url(data, "organization_a", "metric-snapshots"),
+        headers=headers["editor"],
+        json={"post_id": post_a_id, "metric_definition_id": str(metric.id), "value": "1", "captured_at": "2026-01-01T02:00:00Z"},
+    ).status_code == 201
+    assert client.post(
+        organization_url(data, "organization_a", "metric-snapshots"),
+        headers=headers["editor"],
+        json={"post_id": post_b_id, "metric_definition_id": str(metric.id), "value": "1", "captured_at": "2026-01-01T02:00:00Z"},
+    ).status_code == 404
+    snapshot_b = client.post(
+        organization_url(data, "organization_b", "metric-snapshots"),
+        headers=headers["owner"],
+        json={"post_id": post_b_id, "metric_definition_id": str(metric.id), "value": "9", "captured_at": "2026-01-01T02:00:00Z"},
+    )
+    assert snapshot_b.status_code == 201
+    evaluation_a = client.get(f"{experiments_a}/{experiment_a_id}/evaluation", headers=headers["reader"])
+    assert evaluation_a.status_code == 200
+    assert {metric["post_id"] for metric in evaluation_a.json()["metrics"]} == {post_a_id}
+    assert client.get(f"{experiments_a}/{experiment_b_id}/evaluation", headers=headers["owner"]).status_code == 404
     assert client.get(campaigns_a, headers=headers["owner"]).json()[0]["id"] == campaign_id
     assert client.get("/posts", headers=headers["owner"]).status_code == 404
     assert client.get("/campaigns", headers=headers["owner"]).status_code == 404

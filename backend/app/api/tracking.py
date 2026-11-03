@@ -12,13 +12,16 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.experiments import get_experiment_or_404
+from app.api.organization_dependencies import CommercialRole, OrgContext, require_org_roles
+from app.api.scoped_loaders import get_experiment_for_org, get_tracking_link_for_org
 from app.config import get_settings
 from app.db.models import Experiment, TrackingEvent, TrackingLink
 from app.db.session import get_db
 from app.schemas import TrackingLinkCreate, TrackingLinkRead, TrackingLinkUpdate
 
 router = APIRouter(tags=["tracking"])
+READ_ROLES = tuple(CommercialRole)
+WRITE_ROLES = (CommercialRole.OWNER, CommercialRole.ADMIN, CommercialRole.EDITOR)
 _requests: dict[str, deque[datetime]] = defaultdict(deque)
 _rate_lock = Lock()
 _rate_salt = token_bytes(32)
@@ -86,9 +89,9 @@ def request_allowed(request: Request) -> bool:
     return True
 
 
-@router.post("/tracking-links", response_model=TrackingLinkRead, status_code=201)
-def create_tracking_link(payload: TrackingLinkCreate, session: Session = Depends(get_db)) -> TrackingLinkRead:
-    get_experiment_or_404(payload.experiment_id, session)
+@router.post("/organizations/{organization_id}/tracking-links", response_model=TrackingLinkRead, status_code=201)
+def create_tracking_link(payload: TrackingLinkCreate, context: OrgContext = Depends(require_org_roles(*WRITE_ROLES)), session: Session = Depends(get_db)) -> TrackingLinkRead:
+    get_experiment_for_org(session, context.organization.id, payload.experiment_id)
     destination = str(payload.destination_url)
     if not is_allowed_destination(destination):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Destination host is not allowed.")
@@ -105,44 +108,42 @@ def create_tracking_link(payload: TrackingLinkCreate, session: Session = Depends
     raise HTTPException(status_code=503, detail="Could not allocate a unique tracking code.")
 
 
-@router.get("/tracking-links", response_model=list[TrackingLinkRead])
-def list_tracking_links(experiment_id: UUID | None = None, session: Session = Depends(get_db)) -> list[TrackingLinkRead]:
-    query = select(TrackingLink).options(selectinload(TrackingLink.experiment)).order_by(TrackingLink.created_at.desc())
+@router.get("/organizations/{organization_id}/tracking-links", response_model=list[TrackingLinkRead])
+def list_tracking_links(experiment_id: UUID | None = None, context: OrgContext = Depends(require_org_roles(*READ_ROLES)), session: Session = Depends(get_db)) -> list[TrackingLinkRead]:
+    query = select(TrackingLink).join(Experiment).where(Experiment.campaign.has(organization_id=context.organization.id)).options(selectinload(TrackingLink.experiment)).order_by(TrackingLink.created_at.desc())
     if experiment_id:
+        get_experiment_for_org(session, context.organization.id, experiment_id)
         query = query.where(TrackingLink.experiment_id == experiment_id)
     return [serialize_link(link) for link in session.scalars(query)]
 
 
-@router.patch("/tracking-links/{link_id}", response_model=TrackingLinkRead)
-def update_tracking_link(link_id: UUID, payload: TrackingLinkUpdate, session: Session = Depends(get_db)) -> TrackingLinkRead:
-    link = session.scalar(select(TrackingLink).options(selectinload(TrackingLink.experiment)).where(TrackingLink.id == link_id))
-    if link is None:
-        raise HTTPException(status_code=404, detail="Tracking link not found.")
+@router.patch("/organizations/{organization_id}/tracking-links/{link_id}", response_model=TrackingLinkRead)
+def update_tracking_link(link_id: UUID, payload: TrackingLinkUpdate, context: OrgContext = Depends(require_org_roles(*WRITE_ROLES)), session: Session = Depends(get_db)) -> TrackingLinkRead:
+    link = get_tracking_link_for_org(session, context.organization.id, link_id)
     link.is_active = payload.is_active
     session.commit()
     session.refresh(link)
     return serialize_link(link)
 
 
-@router.get("/tracking-links/{link_id}/clicks")
-def link_clicks(link_id: UUID, session: Session = Depends(get_db)) -> dict[str, object]:
-    link = session.get(TrackingLink, link_id)
-    if link is None:
-        raise HTTPException(status_code=404, detail="Tracking link not found.")
+@router.get("/organizations/{organization_id}/tracking-links/{link_id}/clicks")
+def link_clicks(link_id: UUID, context: OrgContext = Depends(require_org_roles(*READ_ROLES)), session: Session = Depends(get_db)) -> dict[str, object]:
+    link = get_tracking_link_for_org(session, context.organization.id, link_id)
     clicks = session.scalar(select(func.count()).select_from(TrackingEvent).where(TrackingEvent.tracking_link_id == link_id, TrackingEvent.event_type == "click"))
     return {"tracking_link_id": str(link_id), "clicks_registered": clicks or 0, "limitations": ["Clicks are not unique people, reach, or Instagram impressions."]}
 
 
-@router.get("/tracking/attribution")
-def tracking_attribution(group_by: str = "utm_source", experiment_id: UUID | None = None, occurred_from: datetime | None = None, occurred_to: datetime | None = None, session: Session = Depends(get_db)) -> dict[str, object]:
+@router.get("/organizations/{organization_id}/tracking/attribution")
+def tracking_attribution(group_by: str = "utm_source", experiment_id: UUID | None = None, occurred_from: datetime | None = None, occurred_to: datetime | None = None, context: OrgContext = Depends(require_org_roles(*READ_ROLES)), session: Session = Depends(get_db)) -> dict[str, object]:
     columns = {"utm_source": TrackingLink.utm_source, "utm_medium": TrackingLink.utm_medium, "experiment": TrackingLink.experiment_id}
     column = columns.get(group_by)
     if column is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Unsupported group_by.")
     if occurred_from and occurred_to and occurred_to < occurred_from:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Invalid activity period.")
-    query = select(column.label("dimension"), func.count(TrackingEvent.id).label("clicks")).join(TrackingEvent).where(TrackingEvent.event_type == "click")
+    query = select(column.label("dimension"), func.count(TrackingEvent.id).label("clicks")).join(TrackingEvent).join(Experiment).where(TrackingEvent.event_type == "click", Experiment.campaign.has(organization_id=context.organization.id))
     if experiment_id:
+        get_experiment_for_org(session, context.organization.id, experiment_id)
         query = query.where(TrackingLink.experiment_id == experiment_id)
     if occurred_from:
         query = query.where(TrackingEvent.occurred_at >= occurred_from)

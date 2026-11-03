@@ -5,17 +5,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.analytics.metrics import Observation, variation
-from app.api.experiments import get_experiment_or_404
+from app.api.organization_dependencies import CommercialRole, OrgContext, require_org_roles
+from app.api.scoped_loaders import get_experiment_for_org
 from app.db.models import MetricDefinition, PublicMetricSnapshot, TrackingEvent, TrackingLink, campaign_posts
 from app.db.session import get_db
 
 router = APIRouter(tags=["experiment-results"])
 
 
-@router.get("/experiments/{experiment_id}/evaluation")
-def evaluate_experiment(experiment_id: UUID, metric_name: str | None = None, session: Session = Depends(get_db)) -> dict[str, object]:
-    experiment = get_experiment_or_404(experiment_id, session)
-    query = select(PublicMetricSnapshot, MetricDefinition.name).join(MetricDefinition).join(campaign_posts, PublicMetricSnapshot.post_id == campaign_posts.c.post_id).where(campaign_posts.c.campaign_id == experiment.campaign_id)
+@router.get("/organizations/{organization_id}/experiments/{experiment_id}/evaluation")
+def evaluate_experiment(experiment_id: UUID, metric_name: str | None = None, context: OrgContext = Depends(require_org_roles(*CommercialRole)), session: Session = Depends(get_db)) -> dict[str, object]:
+    experiment = get_experiment_for_org(session, context.organization.id, experiment_id)
+    query = select(PublicMetricSnapshot, MetricDefinition.name).join(MetricDefinition).join(campaign_posts, PublicMetricSnapshot.post_id == campaign_posts.c.post_id).where(campaign_posts.c.campaign_id == experiment.campaign_id, campaign_posts.c.organization_id == context.organization.id)
     if metric_name:
         query = query.where(MetricDefinition.name == metric_name)
     rows = session.execute(query.order_by(PublicMetricSnapshot.captured_at)).all()

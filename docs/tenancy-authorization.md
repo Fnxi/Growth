@@ -26,6 +26,6 @@ The persisted `analyst` and `viewer` membership roles are compatibility roles. `
 
 Do not use `session.get()` by resource ID for tenant-owned data. Load every resource through the active organization scope, including lists, aggregates, child resources, dashboard queries, evaluation, tracking, and assistant context.
 
-## Stage 2 Temporary Compatibility Debt
+## Remaining Scope
 
-Campaign and Post CRUD routes are tenant-scoped under `/organizations/{organization_id}`. Until stage 3 scopes their dependent routers, two pre-existing global accesses remain intentionally unchanged: `snapshots.py` imports `posts.get_post_or_404`, and `experiments.py` validates `campaign_id` with `session.get(Campaign, ...)`. These are not authorized patterns for new code and do not make the backend fully tenant-isolated or production-ready.
+Campaign, Post, Experiment, Distribution Event, Tracking Link, Snapshot, and Assistant routes are tenant-scoped. Dashboard, analytics, operational intelligence, and platform-global endpoints remain outside this rollout and must not be considered tenant-isolated.
