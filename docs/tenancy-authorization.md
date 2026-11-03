@@ -25,3 +25,7 @@ Use `OWNER`, `ADMIN`, or `EDITOR` for create and update operations. Use `OWNER` 
 The persisted `analyst` and `viewer` membership roles are compatibility roles. `commercial_role()` maps them to effective `EDITOR` and `READER` permissions without changing schema or data. A future migration may add persisted `editor` and `reader` values; until then, new memberships must use the existing database enum values.
 
 Do not use `session.get()` by resource ID for tenant-owned data. Load every resource through the active organization scope, including lists, aggregates, child resources, dashboard queries, evaluation, tracking, and assistant context.
+
+## Stage 2 Temporary Compatibility Debt
+
+Campaign and Post CRUD routes are tenant-scoped under `/organizations/{organization_id}`. Until stage 3 scopes their dependent routers, two pre-existing global accesses remain intentionally unchanged: `snapshots.py` imports `posts.get_post_or_404`, and `experiments.py` validates `campaign_id` with `session.get(Campaign, ...)`. These are not authorized patterns for new code and do not make the backend fully tenant-isolated or production-ready.

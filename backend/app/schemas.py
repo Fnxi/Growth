@@ -54,6 +54,8 @@ class PeriodModel(BaseModel):
 
 
 class PostCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     canonical_url: HttpUrl
     platform: str = Field(default="instagram", min_length=1, max_length=50)
     title: str | None = Field(default=None, max_length=255)
@@ -61,6 +63,8 @@ class PostCreate(BaseModel):
 
 
 class PostUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     canonical_url: HttpUrl | None = None
     platform: str | None = Field(default=None, min_length=1, max_length=50)
     title: str | None = Field(default=None, max_length=255)
@@ -78,12 +82,16 @@ class PostRead(ORMModel):
 
 
 class CampaignCreate(PeriodModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
     post_ids: list[UUID] = Field(default_factory=list)
 
 
 class CampaignUpdate(PeriodModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     post_ids: list[UUID] | None = None
