@@ -13,6 +13,7 @@ from sqlalchemy import (
     Enum,
     LargeBinary,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Numeric,
     String,
@@ -146,6 +147,8 @@ class Organization(UUIDModel, TimestampedModel, Base):
 
     memberships: Mapped[list[OrganizationMembership]] = relationship(back_populates="organization")
     audit_events: Mapped[list[AuthAuditEvent]] = relationship(back_populates="organization")
+    campaigns: Mapped[list[Campaign]] = relationship(back_populates="organization")
+    posts: Mapped[list[Post]] = relationship(back_populates="organization")
 
 
 class OrganizationMembership(UUIDModel, TimestampedModel, Base):
@@ -257,18 +260,52 @@ campaign_posts = Table(
     Base.metadata,
     Column("campaign_id", Uuid, ForeignKey("campaigns.id", ondelete="CASCADE"), primary_key=True),
     Column("post_id", Uuid, ForeignKey("posts.id", ondelete="CASCADE"), primary_key=True),
+    Column("organization_id", Uuid, nullable=True),
+    ForeignKeyConstraint(
+        ["organization_id"],
+        ["organizations.id"],
+        name="fk_campaign_post_organization",
+        ondelete="RESTRICT",
+    ),
+    ForeignKeyConstraint(
+        ["campaign_id", "organization_id"],
+        ["campaigns.id", "campaigns.organization_id"],
+        name="fk_campaign_posts_campaign_organization",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["post_id", "organization_id"],
+        ["posts.id", "posts.organization_id"],
+        name="fk_campaign_posts_post_organization",
+        ondelete="CASCADE",
+    ),
+    Index("ix_campaign_posts_organization_id", "organization_id"),
 )
 
 
 class Post(UUIDModel, TimestampedModel, Base):
     __tablename__ = "posts"
+    __table_args__ = (
+        UniqueConstraint("id", "organization_id", name="uq_post_id_organization"),
+        Index("ix_post_organization_id", "organization_id"),
+    )
 
     canonical_url: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
     platform: Mapped[str] = mapped_column(String(50), nullable=False, default="instagram")
     title: Mapped[str | None] = mapped_column(String(255))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    organization_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("organizations.id", name="fk_post_organization", ondelete="RESTRICT")
+    )
 
-    campaigns: Mapped[list[Campaign]] = relationship(secondary=campaign_posts, back_populates="posts")
+    organization: Mapped[Organization | None] = relationship(back_populates="posts")
+    # Tenant-scoped writes must insert campaign_posts explicitly with organization_id; append() cannot populate it.
+    campaigns: Mapped[list[Campaign]] = relationship(
+        secondary=campaign_posts,
+        primaryjoin=lambda: Post.id == campaign_posts.c.post_id,
+        secondaryjoin=lambda: Campaign.id == campaign_posts.c.campaign_id,
+        back_populates="posts",
+    )
     metric_snapshots: Mapped[list[PublicMetricSnapshot]] = relationship(
         back_populates="post", cascade="all, delete-orphan"
     )
@@ -278,14 +315,26 @@ class Campaign(UUIDModel, TimestampedModel, Base):
     __tablename__ = "campaigns"
     __table_args__ = (
         CheckConstraint("ends_at IS NULL OR starts_at IS NULL OR ends_at >= starts_at", name="ck_campaign_period"),
+        UniqueConstraint("id", "organization_id", name="uq_campaign_id_organization"),
+        Index("ix_campaign_organization_id", "organization_id"),
     )
 
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    organization_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("organizations.id", name="fk_campaign_organization", ondelete="RESTRICT")
+    )
 
-    posts: Mapped[list[Post]] = relationship(secondary=campaign_posts, back_populates="campaigns")
+    organization: Mapped[Organization | None] = relationship(back_populates="campaigns")
+    # Tenant-scoped writes must insert campaign_posts explicitly with organization_id; append() cannot populate it.
+    posts: Mapped[list[Post]] = relationship(
+        secondary=campaign_posts,
+        primaryjoin=lambda: Campaign.id == campaign_posts.c.campaign_id,
+        secondaryjoin=lambda: Post.id == campaign_posts.c.post_id,
+        back_populates="campaigns",
+    )
     experiments: Mapped[list[Experiment]] = relationship(
         back_populates="campaign", cascade="all, delete-orphan"
     )
