@@ -222,6 +222,51 @@ def test_assistant_requires_tenant_membership_and_never_shares_context(
     assert campaign_a_name not in chat_b
 
 
+def test_dashboard_and_analytics_are_scoped_by_organization(
+    tenancy_client: tuple[TestClient, dict[str, object]]
+) -> None:
+    client, data = tenancy_client
+    headers = data["headers"]
+    session = data["session"]
+    assert isinstance(headers, dict)
+    assert isinstance(session, Session)
+    posts_a, posts_b = organization_url(data, "organization_a", "posts"), organization_url(data, "organization_b", "posts")
+    campaigns_a, campaigns_b = organization_url(data, "organization_a", "campaigns"), organization_url(data, "organization_b", "campaigns")
+    post_a = client.post(posts_a, headers=headers["owner"], json={"canonical_url": f"https://example.test/dashboard-a/{uuid4()}"}).json()
+    post_b = client.post(posts_b, headers=headers["owner"], json={"canonical_url": f"https://example.test/dashboard-b/{uuid4()}"}).json()
+    campaign_a_name, campaign_b_name = f"Dashboard A {uuid4().hex}", f"Dashboard B {uuid4().hex}"
+    campaign_a = client.post(campaigns_a, headers=headers["owner"], json={"name": campaign_a_name, "post_ids": [post_a["id"]]}).json()
+    campaign_b = client.post(campaigns_b, headers=headers["owner"], json={"name": campaign_b_name, "post_ids": [post_b["id"]]}).json()
+    experiment_a = client.post(organization_url(data, "organization_a", "experiments"), headers=headers["owner"], json={"campaign_id": campaign_a["id"], "name": "Experiment A", "hypothesis": "h", "variable": "v", "method": "m", "starts_at": "2026-01-01T00:00:00Z"}).json()
+    experiment_b = client.post(organization_url(data, "organization_b", "experiments"), headers=headers["owner"], json={"campaign_id": campaign_b["id"], "name": "Experiment B", "hypothesis": "h", "variable": "v", "method": "m", "starts_at": "2026-01-01T00:00:00Z"}).json()
+    link_a = client.post(organization_url(data, "organization_a", "tracking-links"), headers=headers["owner"], json={"experiment_id": experiment_a["id"], "destination_url": "https://www.instagram.com/p/dashboard-a/", "utm_source": "a", "utm_medium": "email", "utm_campaign": "a"}).json()
+    link_b = client.post(organization_url(data, "organization_b", "tracking-links"), headers=headers["owner"], json={"experiment_id": experiment_b["id"], "destination_url": "https://www.instagram.com/p/dashboard-b/", "utm_source": "b", "utm_medium": "email", "utm_campaign": "b"}).json()
+    assert client.get(f"/r/{link_a['code']}", follow_redirects=False).status_code == 307
+    assert client.get(f"/r/{link_b['code']}", follow_redirects=False).status_code == 307
+    metric = MetricDefinition(name=f"dashboard_metric_{uuid4().hex}", category="engagement", source="manual", limitations="test", classification=MetricClassification.OBSERVED)
+    session.add(metric)
+    session.commit()
+    assert client.post(organization_url(data, "organization_a", "metric-snapshots"), headers=headers["owner"], json={"post_id": post_a["id"], "metric_definition_id": str(metric.id), "value": "2", "captured_at": "2026-01-01T02:00:00Z"}).status_code == 201
+    assert client.post(organization_url(data, "organization_b", "metric-snapshots"), headers=headers["owner"], json={"post_id": post_b["id"], "metric_definition_id": str(metric.id), "value": "9", "captured_at": "2026-01-01T02:00:00Z"}).status_code == 201
+    dashboard_a = organization_url(data, "organization_a", "dashboard/summary")
+    dashboard_b = organization_url(data, "organization_b", "dashboard/summary")
+    analytics_a = organization_url(data, "organization_a", f"analytics/observed-metrics?metric_name={metric.name}")
+    assert client.get("/dashboard/summary").status_code == 404
+    assert client.get(dashboard_a).status_code == 401
+    assert client.get(dashboard_a, headers=headers["outsider"]).status_code == 403
+    summary_a = client.get(dashboard_a, headers=headers["reader"])
+    assert summary_a.status_code == 200
+    assert summary_a.json()["campaigns"] == 1 and summary_a.json()["experiments"] == 1 and summary_a.json()["posts"] == 1 and summary_a.json()["clicks_registered"] == 1
+    assert summary_a.json()["recent_experiments"][0]["id"] == experiment_a["id"]
+    assert campaign_b_name not in str(summary_a.json()) and experiment_b["id"] not in str(summary_a.json())
+    assert client.get(dashboard_b, headers=headers["owner"]).json()["recent_experiments"][0]["id"] == experiment_b["id"]
+    assert client.get(analytics_a).status_code == 401
+    assert client.get(analytics_a, headers=headers["outsider"]).status_code == 403
+    points_a = client.get(analytics_a, headers=headers["reader"])
+    assert points_a.status_code == 200 and points_a.json()["points"] == [{"post_id": post_a["id"], "value": "2.0000", "captured_at": "2026-01-01T02:00:00Z"}]
+    assert client.get(f"{analytics_a}&post_id={post_b['id']}", headers=headers["reader"]).status_code == 404
+
+
 def test_campaign_and_post_routes_enforce_tenant_scope_roles_and_explicit_associations(
     tenancy_client: tuple[TestClient, dict[str, object]]
 ) -> None:
