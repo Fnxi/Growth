@@ -267,6 +267,40 @@ def test_dashboard_and_analytics_are_scoped_by_organization(
     assert client.get(f"{analytics_a}&post_id={post_b['id']}", headers=headers["reader"]).status_code == 404
 
 
+def test_operational_intelligence_is_scoped_by_organization(
+    tenancy_client: tuple[TestClient, dict[str, object]]
+) -> None:
+    client, data = tenancy_client
+    headers, session = data["headers"], data["session"]
+    assert isinstance(headers, dict) and isinstance(session, Session)
+    metric = MetricDefinition(name=f"intelligence_metric_{uuid4().hex}", category="engagement", source="manual", limitations="test", classification=MetricClassification.OBSERVED)
+    session.add(metric)
+    session.commit()
+    values = {"organization_a": ("a", ["10", "11", "30"]), "organization_b": ("b", ["100", "110", "220"])}
+    results = {}
+    for organization_key, (label, observations) in values.items():
+        posts = organization_url(data, organization_key, "posts")
+        campaigns = organization_url(data, organization_key, "campaigns")
+        post = client.post(posts, headers=headers["owner"], json={"canonical_url": f"https://example.test/intelligence-{label}/{uuid4()}"}).json()
+        campaign = client.post(campaigns, headers=headers["owner"], json={"name": f"Intelligence {label} {uuid4().hex}", "post_ids": [post["id"]]}).json()
+        for day, value in enumerate(observations, 1):
+            assert client.post(organization_url(data, organization_key, "metric-snapshots"), headers=headers["owner"], json={"post_id": post["id"], "metric_definition_id": str(metric.id), "value": value, "captured_at": f"2026-01-0{day}T00:00:00Z"}).status_code == 201
+        results[organization_key] = post["id"]
+    base_a = organization_url(data, "organization_a", "operational-intelligence")
+    base_b = organization_url(data, "organization_b", "operational-intelligence")
+    assert client.get(f"{base_a}/summary").status_code == 401
+    assert client.get(f"{base_a}/summary", headers=headers["outsider"]).status_code == 403
+    for resource in ("anomalies", "trends", "findings", "recommendations", "summary"):
+        response_a = client.get(f"{base_a}/{resource}", headers=headers["reader"])
+        response_b = client.get(f"{base_b}/{resource}", headers=headers["owner"])
+        assert response_a.status_code == 200 and response_b.status_code == 200
+        assert results["organization_a"] in str(response_a.json())
+        assert results["organization_b"] not in str(response_a.json())
+        assert results["organization_b"] in str(response_b.json())
+        assert results["organization_a"] not in str(response_b.json())
+        assert "InfrastructureEvent" not in str(response_a.json()) and "check-duration" not in str(response_a.json())
+
+
 def test_campaign_and_post_routes_enforce_tenant_scope_roles_and_explicit_associations(
     tenancy_client: tuple[TestClient, dict[str, object]]
 ) -> None:

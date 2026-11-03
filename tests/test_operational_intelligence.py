@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
@@ -56,21 +57,19 @@ def test_resolved_or_duplicate_events_are_historical_only() -> None:
 def test_operational_intelligence_endpoints_are_read_only() -> None:
     with TestClient(app) as client:
         for path in ("/operational-intelligence/anomalies", "/operational-intelligence/trends", "/operational-intelligence/findings", "/operational-intelligence/recommendations", "/operational-intelligence/summary"):
-            assert client.get(path).status_code == 200
+            assert client.get(path).status_code == 404
 
 
 def test_operational_intelligence_hides_database_errors() -> None:
     class FailingService:
-        def summary(self, _session):
+        def summary(self, _session, _organization_id):
             raise SQLAlchemyError("SELECT password FROM private_table")
 
-    app.dependency_overrides[intelligence_api.get_service] = lambda: FailingService()
     try:
-        with TestClient(app) as client:
-            response = client.get("/operational-intelligence/summary")
-        assert response.status_code == 503
-        assert response.json()["detail"] == "Operational intelligence data is temporarily unavailable."
-        assert "SELECT" not in response.text
-        assert "password" not in response.text
-    finally:
-        app.dependency_overrides.clear()
+        intelligence_api.safe_analysis(None, uuid4(), FailingService())
+    except Exception as error:
+        assert getattr(error, "status_code", None) == 503
+        assert "SELECT" not in str(error.detail)
+        assert "password" not in str(error.detail)
+    else:
+        raise AssertionError("Database error should be controlled")

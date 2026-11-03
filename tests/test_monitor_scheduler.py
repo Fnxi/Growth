@@ -2,9 +2,14 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
 from types import SimpleNamespace
+import os
+from urllib.parse import urlsplit
 
+import pytest
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 import app.infrastructure_events as infrastructure_events
 import app.monitor_scheduler as monitor_scheduler
@@ -12,6 +17,23 @@ from app.api import system
 from app.db.models import InfrastructureCheckRun, InfrastructureEvent, InfrastructureSchedulerHeartbeat, SchedulerRunStatus
 from app.db.session import get_engine, get_session_factory
 from app.monitor_scheduler import InfrastructureScheduler, SCHEDULER_LOCK_ID, SCHEDULER_NAME
+
+
+@pytest.fixture(autouse=True)
+def isolated_scheduler_database(monkeypatch):
+    database_url = os.environ.get("TENANCY_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TENANCY_TEST_DATABASE_URL is required for scheduler integration tests.")
+    database_name = urlsplit(database_url).path.lstrip("/")
+    if database_name in {"growth_lab", "growth_lab_demo"} or not (database_name.startswith("test_") or database_name.endswith("_test")):
+        pytest.fail("Scheduler tests require a dedicated PostgreSQL test database.")
+    engine = create_engine(database_url)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(__import__(__name__), "get_engine", lambda: engine)
+    monkeypatch.setattr(__import__(__name__), "get_session_factory", lambda: factory)
+    monkeypatch.setattr(monitor_scheduler, "get_session_factory", lambda: factory)
+    yield
+    engine.dispose()
 
 
 def _clear_scheduler_data() -> None:

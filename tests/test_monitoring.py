@@ -1,12 +1,31 @@
 from contextlib import contextmanager
+import os
+from urllib.parse import urlsplit
 
+import pytest
 from sqlalchemy.exc import OperationalError
-from sqlalchemy import delete, select
+from sqlalchemy import create_engine, delete, select
+from sqlalchemy.orm import sessionmaker
 
 from app.db.models import InfrastructureAlert, InfrastructureEvent
 from app.db.session import get_session_factory
 from app.infrastructure_events import record_transitions
 from app.monitoring import ComponentStatus, SystemStatus, check_postgres, overall_status
+
+
+@pytest.fixture(autouse=True)
+def isolated_monitoring_database(monkeypatch):
+    database_url = os.environ.get("TENANCY_TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TENANCY_TEST_DATABASE_URL is required for monitoring integration tests.")
+    database_name = urlsplit(database_url).path.lstrip("/")
+    if database_name in {"growth_lab", "growth_lab_demo"} or not (database_name.startswith("test_") or database_name.endswith("_test")):
+        pytest.fail("Monitoring tests require a dedicated PostgreSQL test database.")
+    engine = create_engine(database_url)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(__import__(__name__), "get_session_factory", lambda: factory)
+    yield
+    engine.dispose()
 
 
 class HealthyConnection:
