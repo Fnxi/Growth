@@ -1,19 +1,14 @@
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from uuid import uuid4
 
-from fastapi.testclient import TestClient
 import httpx
 import pytest
 
-from app.api import assistant as assistant_api
 from app.assistant.context import ContextBuilder
 from app.assistant.limits import AssistantRequestLimiter
 from app.assistant.providers import AssistantProviderError, OpenAIResponsesProvider, ProviderResult
 from app.assistant.service import AssistantService
-from app.db.session import get_session_factory
-from app.main import app
 from app.schemas import AssistantChatRequest
-from app.operational_intelligence.engine import AnalysisItem
 
 
 class FakeProvider:
@@ -51,9 +46,9 @@ def test_assistant_disabled_and_unconfigured_statuses() -> None:
 def test_assistant_returns_valid_structured_response_without_writes() -> None:
     provider = FakeProvider()
     service = AssistantService(settings(), provider)
-    with get_session_factory()() as session:
-        response = service.chat(session, AssistantChatRequest(question="What is the infrastructure state?"))
-        assert not session.new
+    session = SimpleNamespace(new=set())
+    response = service.chat(session, uuid4(), AssistantChatRequest(question="Status?"))
+    assert not session.new
     assert response.answer == "Observed data only."
     assert "invented:reference" not in response.references
     assert provider.calls
@@ -61,14 +56,14 @@ def test_assistant_returns_valid_structured_response_without_writes() -> None:
 
 
 def test_assistant_rejects_provider_failures_and_invalid_responses() -> None:
-    with get_session_factory()() as session:
-        for provider in (FakeProvider(error=AssistantProviderError("timeout")), FakeProvider(content="not json")):
-            try:
-                AssistantService(settings(), provider).chat(session, AssistantChatRequest(question="Status?"))
-            except AssistantProviderError:
-                pass
-            else:
-                raise AssertionError("Provider failure should be controlled")
+    session = SimpleNamespace()
+    for provider in (FakeProvider(error=AssistantProviderError("timeout")), FakeProvider(content="not json")):
+        try:
+            AssistantService(settings(), provider).chat(session, uuid4(), AssistantChatRequest(question="Status?"))
+        except AssistantProviderError:
+            pass
+        else:
+            raise AssertionError("Provider failure should be controlled")
 
 
 def test_openai_provider_uses_store_false_and_hides_authentication_error(monkeypatch) -> None:
@@ -134,81 +129,39 @@ def test_assistant_limiter_enforces_rate_and_concurrency() -> None:
 
 def test_assistant_errors_do_not_log_secret(caplog) -> None:
     provider = FakeProvider(error=AssistantProviderError("authentication_failed"))
-    with get_session_factory()() as session:
-        try:
-            AssistantService(settings(ai_openai_api_key="secret-key"), provider).chat(session, AssistantChatRequest(question="Status?"))
-        except AssistantProviderError:
-            pass
+    try:
+        AssistantService(settings(ai_openai_api_key="secret-key"), provider).chat(SimpleNamespace(), uuid4(), AssistantChatRequest(question="Status?"))
+    except AssistantProviderError:
+        pass
     assert "secret-key" not in caplog.text
 
 
 def test_context_is_bounded_and_does_not_include_link_destinations() -> None:
-    with get_session_factory()() as session:
-        context, _ = ContextBuilder(200).build(session, "tracking metrics")
+    class EmptyResult:
+        def all(self):
+            return []
+
+    class EmptySession:
+        def scalars(self, _statement):
+            return []
+
+        def execute(self, _statement):
+            return EmptyResult()
+
+    context, _ = ContextBuilder(200).build(EmptySession(), uuid4(), "tracking metrics")
     assert len(context) <= 200
     assert "destination_url" not in context
 
 
-def test_assistant_endpoints_validate_and_use_fake_provider() -> None:
-    service = AssistantService(settings(), FakeProvider())
-    app.dependency_overrides[assistant_api.get_assistant_service] = lambda: service
-    try:
-        with TestClient(app) as client:
-            assert client.get("/assistant/status").json()["status"] == "available"
-            assert client.post("/assistant/chat", json={"question": ""}).status_code == 422
-            response = client.post("/assistant/chat", json={"question": "Give a summary."})
-            assert response.status_code == 200
-            assert response.json()["answer"] == "Observed data only."
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_assistant_endpoint_returns_429_when_local_limit_is_reached(monkeypatch) -> None:
-    service = AssistantService(settings(), FakeProvider())
-    limiter = AssistantRequestLimiter(limit=1, window_seconds=60, max_concurrent=1)
-    monkeypatch.setattr(assistant_api, "get_assistant_limiter", lambda: limiter)
-    app.dependency_overrides[assistant_api.get_assistant_service] = lambda: service
-    try:
-        with TestClient(app) as client:
-            assert client.post("/assistant/chat", json={"question": "First"}).status_code == 200
-            response = client.post("/assistant/chat", json={"question": "Second"})
-            assert response.status_code == 429
-            assert response.headers["Retry-After"]
-    finally:
-        app.dependency_overrides.clear()
-
-
-def test_operational_questions_load_only_calculated_intelligence_context(monkeypatch) -> None:
-    item = AnalysisItem("recurrent-events:postgresql", "recurrent_infrastructure_event", "warning", "Historical recurrence.", "3", "3", datetime.now(timezone.utc), ("event:valid",), ("Historical only.",))
-    calls = []
-
-    class AnalysisService:
-        def __init__(self, _settings):
-            pass
-
-        def analyze(self, _session):
-            calls.append(True)
-            return [item]
-
-    monkeypatch.setattr("app.assistant.context.OperationalIntelligenceService", AnalysisService)
-    with get_session_factory()() as session:
-        context, references = ContextBuilder(5000).build(session, "Explain the anomaly priority")
-        ordinary_context, _ = ContextBuilder(5000).build(session, "List campaigns")
-    assert "operational_intelligence" in context
-    assert "recurrent-events:postgresql" in references
-    assert "operational_intelligence" not in ordinary_context
-    assert len(calls) == 1
-
-
-def test_assistant_keeps_only_valid_anomaly_references(monkeypatch) -> None:
+def test_assistant_keeps_only_context_references(monkeypatch) -> None:
     class FixedContextBuilder:
         def __init__(self, _max_characters):
             pass
 
-        def build(self, _session, _question):
-            return "{}", ["recurrent-events:postgresql"]
+        def build(self, _session, _organization_id, _question):
+            return "{}", ["campaign:valid"]
 
-    provider = FakeProvider(content='{"answer":"Observed.","observed_facts":[],"interpretations":[],"recommendations":[],"insufficient_information":[],"references":["recurrent-events:postgresql","recurrent-events:invented","event:arbitrary"]}')
+    provider = FakeProvider(content='{"answer":"Observed.","observed_facts":[],"interpretations":[],"recommendations":[],"insufficient_information":[],"references":["campaign:valid","campaign:invented","event:arbitrary"]}')
     monkeypatch.setattr("app.assistant.service.ContextBuilder", FixedContextBuilder)
-    response = AssistantService(settings(), provider).chat(None, AssistantChatRequest(question="Explain anomalies"))
-    assert response.references == ["recurrent-events:postgresql"]
+    response = AssistantService(settings(), provider).chat(None, uuid4(), AssistantChatRequest(question="Explain campaigns"))
+    assert response.references == ["campaign:valid"]

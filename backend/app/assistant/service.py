@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -26,10 +27,10 @@ class AssistantService:
             return AssistantStatusRead(status=AssistantAvailability.NOT_CONFIGURED, provider=self.settings.ai_provider, model=self.settings.ai_model)
         return AssistantStatusRead(status=AssistantAvailability.AVAILABLE, provider=self.settings.ai_provider, model=self.settings.ai_model)
 
-    def chat(self, session: Session, request: AssistantChatRequest) -> AssistantResponse:
+    def chat(self, session: Session, organization_id: UUID, request: AssistantChatRequest) -> AssistantResponse:
         if self.status().status != AssistantAvailability.AVAILABLE:
             raise AssistantProviderError("not_available")
-        context, references = ContextBuilder(self.settings.ai_max_context_characters).build(session, request.question)
+        context, references = ContextBuilder(self.settings.ai_max_context_characters).build(session, organization_id, request.question)
         history = [{"role": item.role, "content": item.content} for item in request.history]
         input_text = json.dumps({"question": request.question, "history": history, "context": context}, ensure_ascii=True)
         provider = self.provider or OpenAIResponsesProvider(self.settings.ai_openai_api_key or "", self.settings.ai_model, self.settings.ai_timeout_seconds)

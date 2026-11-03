@@ -4,6 +4,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 import json
 import os
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -12,6 +13,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+from app.api import assistant as assistant_api
+from app.assistant.providers import ProviderResult
+from app.assistant.service import AssistantService
 from app.config import Settings, get_settings
 from app.db.models import (
     AuthSession,
@@ -140,6 +144,80 @@ def tenancy_client() -> tuple[TestClient, dict[str, object]]:
 
 def organization_url(data: dict[str, object], organization_key: str, resource: str) -> str:
     return f"/organizations/{data[organization_key]}/{resource}"
+
+
+def test_assistant_requires_tenant_membership_and_never_shares_context(
+    tenancy_client: tuple[TestClient, dict[str, object]]
+) -> None:
+    class CapturingProvider:
+        def __init__(self) -> None:
+            self.inputs: list[str] = []
+
+        def respond(self, _instructions: str, input_text: str, _max_output_tokens: int) -> ProviderResult:
+            self.inputs.append(input_text)
+            return ProviderResult(
+                content='{"answer":"Observed.","observed_facts":[],"interpretations":[],"recommendations":[],"insufficient_information":[],"references":[]}',
+                input_tokens=1,
+                output_tokens=1,
+            )
+
+    client, data = tenancy_client
+    headers = data["headers"]
+    assert isinstance(headers, dict)
+    campaigns_a = organization_url(data, "organization_a", "campaigns")
+    campaigns_b = organization_url(data, "organization_b", "campaigns")
+    assistant_a = organization_url(data, "organization_a", "assistant")
+    assistant_b = organization_url(data, "organization_b", "assistant")
+    campaign_a_name = f"tenant-a-private-{uuid4().hex}"
+    campaign_b_name = f"tenant-b-private-{uuid4().hex}"
+    assert client.post(campaigns_a, headers=headers["owner"], json={"name": campaign_a_name}).status_code == 201
+    assert client.post(campaigns_b, headers=headers["owner"], json={"name": campaign_b_name}).status_code == 201
+
+    provider = CapturingProvider()
+    app = client.app
+    app.dependency_overrides[assistant_api.get_assistant_service] = lambda: AssistantService(
+        SimpleNamespace(
+            ai_enabled=True,
+            ai_provider="openai",
+            ai_openai_api_key="test-key",
+            ai_model="test-model",
+            ai_timeout_seconds=1,
+            ai_max_output_tokens=200,
+            ai_max_context_characters=1000,
+        ),
+        provider,
+    )
+    try:
+        assert client.get("/assistant/status").status_code == 404
+        assert client.post("/assistant/chat", json={"question": "experimento"}).status_code == 404
+        assert client.get(f"{assistant_a}/status").status_code == 401
+        assert client.get(f"{assistant_a}/status", headers=headers["outsider"]).status_code == 403
+        assert client.get(f"{assistant_a}/status", headers=headers["reader"]).status_code == 200
+        assert client.post(f"{assistant_a}/chat", headers=headers["reader"], json={"question": "experimento"}).status_code == 200
+        assert client.post(f"{assistant_a}/diagnosis", headers=headers["reader"]).status_code == 200
+        assert client.post(
+            f"{assistant_a}/chat",
+            headers=headers["reader"],
+            json={"question": "experimento", "organization_id": str(data["organization_b"])},
+        ).status_code == 200
+        assert client.post(f"{assistant_b}/chat", headers=headers["owner"], json={"question": "experimento"}).status_code == 200
+    finally:
+        app.dependency_overrides.pop(assistant_api.get_assistant_service, None)
+
+    assert len(provider.inputs) == 4
+    chat_a, diagnosis_a, claimed_tenant_b_from_a, chat_b = provider.inputs
+    for payload in (chat_a, diagnosis_a, claimed_tenant_b_from_a, chat_b):
+        assert "InfrastructureEvent" not in payload
+        assert "InfrastructureAlert" not in payload
+        assert "InfrastructureCheckRun" not in payload
+        assert "operational_intelligence" not in payload
+    assert campaign_a_name in chat_a
+    assert campaign_b_name not in chat_a
+    assert campaign_b_name not in diagnosis_a
+    assert campaign_a_name in claimed_tenant_b_from_a
+    assert campaign_b_name not in claimed_tenant_b_from_a
+    assert campaign_b_name in chat_b
+    assert campaign_a_name not in chat_b
 
 
 def test_campaign_and_post_routes_enforce_tenant_scope_roles_and_explicit_associations(
