@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
@@ -37,7 +38,51 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-api = ApiClient()
+AUTH_KEY = "auth"
+
+
+def auth_state() -> dict:
+    return st.session_state.get(AUTH_KEY, {})
+
+
+def save_tokens(tokens: dict) -> None:
+    access_token, refresh_token, expires_in = tokens.get("access_token"), tokens.get("refresh_token"), tokens.get("expires_in")
+    if not isinstance(access_token, str) or not access_token or not isinstance(refresh_token, str) or not refresh_token or isinstance(expires_in, bool) or not isinstance(expires_in, (int, float)) or expires_in <= 0:
+        raise ApiError(None, "The API returned an invalid authentication response.")
+    st.session_state[AUTH_KEY] = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_at": datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+        "user": auth_state().get("user"),
+    }
+
+
+def clear_auth() -> None:
+    st.session_state.pop(AUTH_KEY, None)
+    st.session_state.pop("assistant_history", None)
+    st.session_state.pop("active_page", None)
+
+
+api = ApiClient(
+    get_access_token=lambda: auth_state().get("access_token"),
+    get_refresh_token=lambda: auth_state().get("refresh_token"),
+    save_tokens=save_tokens,
+    clear_auth=clear_auth,
+)
+
+
+def load_identity() -> bool:
+    try:
+        user = api.me()
+    except ApiError:
+        clear_auth()
+        return False
+    auth = auth_state()
+    if not auth:
+        return False
+    auth["user"] = user
+    st.session_state[AUTH_KEY] = auth
+    return True
 
 
 def get(path: str):
@@ -69,6 +114,36 @@ def heading(title: str, copy: str):
 
 st.sidebar.markdown('<div class="brand">Growth Hacking Lab</div>', unsafe_allow_html=True)
 st.sidebar.caption("Medición externa y experimentación responsable")
+if not auth_state().get("access_token"):
+    heading("Iniciar sesión", "Usa tus credenciales para acceder al laboratorio.")
+    with st.form("login"):
+        email = st.text_input("Correo electrónico")
+        password = st.text_input("Contraseña", type="password")
+        submitted = st.form_submit_button("Iniciar sesión")
+    if submitted:
+        if not email.strip() or not password:
+            st.error("Ingresa correo electrónico y contraseña.")
+        else:
+            try:
+                with st.spinner("Iniciando sesión..."):
+                    save_tokens(api.login(email.strip(), password))
+                    if not load_identity():
+                        raise ApiError(None, "No fue posible cargar tu identidad.")
+                st.rerun()
+            except ApiError as error:
+                clear_auth()
+                st.error("No fue posible iniciar sesión. Revisa tus credenciales e inténtalo de nuevo.")
+    st.stop()
+
+if not auth_state().get("user") and not load_identity():
+    st.error("Tu sesión no es válida. Inicia sesión nuevamente.")
+    st.stop()
+
+user = auth_state()["user"]
+st.sidebar.caption(f"Sesión: {user['email']}")
+if st.sidebar.button("Cerrar sesión"):
+    api.logout()
+    st.rerun()
 navigation = [
     ("Resumen", ":material/space_dashboard:"),
     ("Campañas", ":material/campaign:"),
